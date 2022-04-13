@@ -1,0 +1,117 @@
+#define BCD0 4
+#define BCD1 5
+#define BCD2 6
+#define BCD3 7
+#define enable 10
+
+void setup(){
+  
+  pinMode(BCD0, OUTPUT);
+  pinMode(BCD1, OUTPUT);
+  pinMode(BCD2, OUTPUT);
+  pinMode(BCD3, OUTPUT);
+  pinMode(enable, OUTPUT);
+  digitalWrite(enable, HIGH);
+  
+  Serial.begin(9600);
+  Serial.println("Digite um numero:");
+  
+}
+
+void loop(){
+  
+  if (Serial.available()){
+    
+    char c = Serial.read();
+    Serial.print("Carartere digitado: ");
+    Serial.println(c);
+    
+    switch(c) {
+
+      case '0':  
+      //Mostrar 0
+      digitalWrite(BCD0, LOW);
+      digitalWrite(BCD1, LOW);
+      digitalWrite(BCD2, LOW);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '1':
+      //Mostrar 1
+      digitalWrite(BCD0, HIGH);
+      digitalWrite(BCD1, LOW);
+      digitalWrite(BCD2, LOW);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '2':  
+      //Mostrar 2
+      digitalWrite(BCD0, LOW);
+      digitalWrite(BCD1, HIGH);
+      digitalWrite(BCD2, LOW);
+      digitalWrite(BCD3, LOW); 
+      break;
+
+      case '3':
+      //Mostrar 3
+      digitalWrite(BCD0, HIGH);
+      digitalWrite(BCD1, HIGH);
+      digitalWrite(BCD2, LOW);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '4':
+      //Mostrar 4
+      digitalWrite(BCD0, LOW);
+      digitalWrite(BCD1, LOW);
+      digitalWrite(BCD2, HIGH);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '5':
+      //Mostrar 5
+      digitalWrite(BCD0, HIGH);
+      digitalWrite(BCD1, LOW);
+      digitalWrite(BCD2, HIGH);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '6':
+      //Mostrar 6
+      digitalWrite(BCD0, LOW);
+      digitalWrite(BCD1, HIGH);
+      digitalWrite(BCD2, HIGH);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '7':
+      //Mostrar 7
+      digitalWrite(BCD0, HIGH);
+      digitalWrite(BCD1, HIGH);
+      digitalWrite(BCD2, HIGH);
+      digitalWrite(BCD3, LOW);
+      break;
+
+      case '8':
+      //Mostrar 8
+      digitalWrite(BCD0, LOW );
+      digitalWrite(BCD1, LOW);
+      digitalWrite(BCD2, LOW);
+      digitalWrite(BCD3, HIGH);
+      break;
+
+      case '9':
+      //Mostrar 9
+      digitalWrite(BCD0, HIGH);
+      digitalWrite(BCD1, LOW);
+      digitalWrite(BCD2, LOW);
+      digitalWrite(BCD3, HIGH);
+      break;
+
+      default:  
+      Serial.println("Entrada invalida no serial monitor!!!");
+      Serial.println("Digite um numero:");
+      break;
+      }
+  }
+}

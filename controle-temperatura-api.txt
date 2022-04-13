@@ -1,0 +1,141 @@
+#include <LiquidCrystal.h>
+LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
+
+int errorLED = 13;
+
+String ssid     = "Simulator Wifi";	// Nome da rede wifi simulada
+String password = ""; //o simulador de wifi nao tem uma senha
+
+String host     = "api.openweathermap.org"; // Open Weather Map API
+const int httpPort   = 80; //porta http
+
+//APPID obtido no OpenWeather.org
+String APPID = "adc471e78e8ad31ba46ad037a9cb6985"; //colocar a sua API_KEY
+
+//endereco da api
+String uri		 = "/data/2.5/weather?q=Votorantim,br&APPID=" + APPID +"&units=metric";
+
+//Funcao responsável por buscar a temperatura através da API
+//openweather.org
+void BuscarTemperatura(){
+  
+  // Construindo a requisicao HTTP
+  String httpPacket = "GET " + uri + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n";
+  int length = httpPacket.length();
+  
+  // Envia o tamanho do pacote para o ESP8266
+  Serial.print("AT+CIPSEND=");
+  Serial.println(length);
+  
+  // Espera um tempo para o pacote ser processado
+  delay(10);
+  
+  // Se existir o caracter > na resposta é porque 
+  // o pacote http pode ser enviado em seguida
+  if (!Serial.find(">")) 
+  {
+    //se algo der errado indica no led 13
+    digitalWrite(errorLED, HIGH);
+  }
+  
+  // Envia o pacote http paara o ESP8266
+  Serial.println(httpPacket);
+  
+  //Aguarda o pacote ser processado
+  delay(10);
+  
+  // Verifica se o ESP8266 reportou alguma falha
+  if (!Serial.find("SEND OK\r\n"))
+  {
+    digitalWrite(errorLED, HIGH);
+  }
+  
+  // Aguarda a existencia de alguma informacao proveniente do
+  // ESP8266 (resposta ao comando get)
+  while(!Serial.available()) 
+  {
+    delay(5);
+  }
+  
+  // Le as informacoes recebidas até encontrar um \r\n\r\n
+  // isso significa que o cabeçalho http foi recebido por completo
+  if (Serial.find("\r\n\r\n"))
+  {	
+    // aguarda o recebimento do corpo da mensagem
+    delay(5);
+    
+    //variavel auxiliar para deteccao de timeout
+    unsigned int i = 0;
+    String outputString = "";
+ 
+    // Processa a mensagem recebida até encontrar a string temp:
+    while (!Serial.find("\"humidity\":")){
+      // correto dentro da mensagem
+    }
+    
+    // tenta processar as informacoes recebidas
+    while (i<100) {
+      // se existirem informacoes a serem processadas
+      if(Serial.available()) {
+        // le os caracteres um a um
+        char c = Serial.read();
+        // Se encontrar um caracter significa que chegamos ao fim
+        // da informação que queriamos encontrar, e termina o loop
+        if((c==','))
+        {
+          break;
+        }
+        
+        // aguarda para processar o proximo caracter para
+        // evitar problemas
+        delay(50);
+        
+        // copia o caracter lido para a variavel a ser 
+        // utilizada posteriormente
+        outputString += c;
+      }
+      // incrementa a variavel de numero de tentativas
+      i++;
+    }
+    
+    // move o cursor para segunda linha do display
+    lcd.setCursor(0,1);
+    // escreve as informacoes no display
+    lcd.print(outputString);
+    lcd.print(" Umidade");    
+  }
+  
+  //aguarda 10 segundos finalizar a funcao
+  delay(10000);
+}
+
+void setup() {
+  
+  lcd.begin(16,2);
+  lcd.print("Votorantim");
+  
+  pinMode(errorLED, OUTPUT);
+  
+  // Start our ESP8266 Serial Communication
+  Serial.begin(115200);
+  Serial.println("AT");
+  delay(10);
+  if (!Serial.find("OK")) 
+    digitalWrite(errorLED, HIGH);
+    
+  // Connect to 123D Circuits Simulator Wifi
+  Serial.println("AT+CWJAP=\"" + ssid + "\",\"" + password + "\"");
+  delay(100);
+  if (!Serial.find("OK")) 
+    digitalWrite(errorLED, HIGH);
+	
+  // Open TCP connection to the host:
+  Serial.println("AT+CIPSTART=\"TCP\",\"" + host + "\"," + httpPort);
+  delay(10);
+  if (!Serial.find("OK")) 
+    digitalWrite(errorLED, HIGH);
+}
+
+void loop() {
+  BuscarTemperatura();
+}

@@ -1,0 +1,62 @@
+#include <IRremoteInterrupts.h>
+
+#include <IRremote.h>
+
+#include <IRremote.h>
+  #include <IRremote.h>// incluindo a biblioteca do infravermelho    
+  const int RECEBE_PINO = 2;     
+  int ledverde = 7; 
+  int ledamarelo = 6;    
+  int ledvermelho = 5;    
+  IRrecv ir_recebe(RECEBE_PINO);   
+  decode_results codigo_recebido;    
+  void setup()    
+  {    
+  Serial.begin(9600);    
+  ir_recebe.enableIRIn(); 
+  pinMode(ledverde, OUTPUT); 
+  pinMode(ledamarelo, OUTPUT);    
+  pinMode(ledvermelho, OUTPUT);    
+  }    
+  void loop() {    
+  if (ir_recebe.decode(&codigo_recebido)) {    
+   if (codigo_recebido.value != 0 ){   
+   Serial.println(codigo_recebido.value, HEX);    
+   }   
+     
+   if ((codigo_recebido.value == 0x39C618E7) || (codigo_recebido.value == 0xFD08F7)){  
+   digitalWrite(ledverde, HIGH);    
+   delay(500);    
+   }    
+      
+   if ((codigo_recebido.value == 0x39C658A7) || (codigo_recebido.value == 0xFD00FF)){    
+   digitalWrite(ledverde, LOW);    
+   delay(500);    
+   }    
+      
+   if ((codigo_recebido.value == 0x39C69867) || (codigo_recebido.value == 0xFD8877)){
+   digitalWrite(ledamarelo, HIGH);    
+   delay(500);    
+   }    
+   
+   if ((codigo_recebido.value == 0x39C628D7) || (codigo_recebido.value == 0xFD00FF)){    
+   digitalWrite(ledamarelo, LOW);    
+   delay(500);    
+   }    
+    
+   if ((codigo_recebido.value == 0x39C6D02F) || (codigo_recebido.value == 0xFD48B7)){    
+   digitalWrite(ledvermelho, HIGH);   
+   delay(500);    
+   }    
+       
+   if ((codigo_recebido.value == 0x39C6E01F) || (codigo_recebido.value == 0xFD00FF)){    
+   digitalWrite(ledvermelho, LOW);    
+   delay(500);    
+   }   
+   
+   ir_recebe.resume();   
+   delay(200);    
+  }    
+    
+
+  } 

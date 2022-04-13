@@ -1,0 +1,665 @@
+#include <LiquidCrystal.h>
+#include <Keypad.h>
+#include <Servo.h>
+
+// Utiliza LEDs para sinalizar a condição de funcionamento do ESP8266
+const int PINO_LED_ERRO = 13;		// Sinaliza erro na comunicação
+
+// Parâmetros associados a lógica de alarme
+const int PINO_ALARME = A5;
+int _condicaoAlarmeAtual;
+const int ALARME_SEM      = 0;
+const int ALARME_AVISO1   = 1;		// Nível de atenção, mas não para o respirador
+const int ALARME_AVISO2   = 2;		// Nível de atenção, mas não para o respirador
+const int ALARME_AVISO3   = 3;		// Nível de atenção, mas não para o respirador
+const int ALARME_CRITICO4 = 4;		// Nível crítico, para o respirador
+const int ALARME_CRITICO5 = 5;		// Nível crítico, para o respirador
+const int ALARME_CRITICO6 = 6;		// Nível crítico, para o respirador
+
+// Mapeamento dos pinos do Arduino
+const int PINO_LCD_DB4          = A0;	// A biblioteca do LCD inicializará os pinos
+const int PINO_LCD_DB5          = A1;
+const int PINO_LCD_DB6          = A2;
+const int PINO_LCD_DB7          = A3;
+const int PINO_LCD_RS           = 12;
+const int PINO_LCD_ENABLE       = 11;
+const int PINO_SERVO_MOTOR      = 10;	// A biblioteca do servo inicializará o pino
+const byte TECLADO_PINO_LINHA1  = 9;	// A biblioteca do teclado inicializará os pinos
+const byte TECLADO_PINO_LINHA2  = 8;
+const byte TECLADO_PINO_LINHA3  = 7;
+const byte TECLADO_PINO_LINHA4  = 6;
+const byte TECLADO_PINO_COLUNA1 = 5;
+const byte TECLADO_PINO_COLUNA2 = 4;
+const byte TECLADO_PINO_COLUNA3 = 3;
+const byte TECLADO_PINO_COLUNA4 = 2;
+
+// Parâmetros da porta serial do ESP8266
+const unsigned long SERIAL_BAUDRATE = 115200L;
+const unsigned long SERIAL_TIMEOUT  = 5000L;
+
+// Rede de WiFi do simulador
+String _ssidName     = "Simulator Wifi";		// Nome da rede
+String _ssidPassword = ""; 						// Sem senha
+int _tcpHttpPort     = 80; 						// Porta HTTP na conexão TCP
+
+// Dados para acesso ao site da Thingspeak
+// https://api.thingspeak.com/update?api_key=AP2SH96CK6KTSTUA&field1=1&field2=12&field3=45&field4=0
+String _siteHost    = "api.thingspeak.com";		// URL
+String _siteAPPID   = "AP2SH96CK6KTSTUA";		// Appkey de escrita no site
+String _siteURIbase = "/update?api_key=" + _siteAPPID;
+String _siteField1  = "&field1=";
+String _siteField2  = "&field2=";
+String _siteField3  = "&field3=";
+String _siteField4  = "&field4=";
+
+// Instancia a classe de controle do servo motor
+Servo _servoMotor;
+// Condição da válvula para controlar o fluxo de ar
+const int VALVULA_INSPIRANDO = 180;
+const int VALVULA_PAUSA      = 90;
+const int VALVULA_EXPIRANDO  = 0;
+
+// Instancia a classe de controle do display LCD
+LiquidCrystal _lcd2x16(PINO_LCD_RS, PINO_LCD_ENABLE, 
+                       PINO_LCD_DB4, PINO_LCD_DB5, PINO_LCD_DB6, PINO_LCD_DB7);
+// Características do LCD
+const int LCD_NUMERO_LINHAS  = 2;
+const int LCD_NUMERO_COLUNAS = 16;
+
+// Definições do teclado de membrana 4x4
+const byte TECLADO_NUMERO_LINHAS  = 4;
+const byte TECLADO_NUMERO_COLUNAS = 4;
+char _mapaTeclas[TECLADO_NUMERO_LINHAS][TECLADO_NUMERO_COLUNAS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'} };
+byte _tecladoPinosLinhas[]  = {TECLADO_PINO_LINHA1, TECLADO_PINO_LINHA2,
+                               TECLADO_PINO_LINHA3, TECLADO_PINO_LINHA4};
+byte _tecladoPinosColunas[] = {TECLADO_PINO_COLUNA1, TECLADO_PINO_COLUNA2,
+                               TECLADO_PINO_COLUNA3, TECLADO_PINO_COLUNA4};
+
+// Instancia a classe de controle do teclado de membrana 4x4
+Keypad _teclado4x4 = Keypad(makeKeymap(_mapaTeclas), 
+                            _tecladoPinosLinhas, _tecladoPinosColunas, 
+                            TECLADO_NUMERO_LINHAS, TECLADO_NUMERO_COLUNAS);
+
+// Controle numero de respirações por minuto
+int _respirarPorMinuto;
+const int TAXA_REPIRACAO_MINIMA  = 10;
+const int TAXA_REPIRACAO_MAXIMA  = 20;
+const int TAXA_REPIRACAO_DEFAULT = 12;
+const int TAXA_REPIRACAO_DELTA   = 1;
+// Preserva a unidade de tempo do ciclo de respiração
+unsigned long _unidadeTempoRespiracao;
+
+// Controle da velocidade da válvula
+int _taxaMovimentoValvula;
+const int VELOCIDADE_VALVULA_MAXIMA  = 90;
+const int VELOCIDADE_VALVULA_MINIMA  = 5;
+const int VELOCIDADE_VALVULA_DEFAULT = 45;
+const int VELOCIDADE_VALVULA_DELTA   = 5;
+// Controle do ciclo de respiração
+enum _enumCicloRespiracao {
+  RESPIRADOR_DESLIGADO = 0,
+  PAUSA_POS_EXPIRAR = 1,
+  INSPIRANDO_1 = 2,
+  INSPIRANDO_2 = 3,
+  PAUSA_POS_INSPIRAR = 4,
+  EXPIRANDO_1 = 5,
+  EXPIRANDO_2 = 6,
+};
+_enumCicloRespiracao _estadoRespirador;
+
+// Controle das temporizações
+unsigned long _tempoAnterior;
+unsigned long _tempoCompletarCiclo;
+int _anguloAtualValvula;
+byte _cursorColunaLinha1;
+
+// Controle da lógica de envio do status
+enum enumEstadoTransamissao {
+  NUVEM_LIVRE = 0,
+  NUVEM_AGUARDANDO_PROMPT = 1,
+  NUVEM_AGUARDANDO_SEND_OK = 2,
+  NUVEM_PURGANDO = 3
+};
+enumEstadoTransamissao _nuvemEstadoEnvio;
+bool _nuvemEnviarEstadoFlag;	// Flag indicativo de envio de estado pendente
+const char RESPONSE_SEND_OK[] = "SEND OK";
+byte _nuvemIndice;				// Ponteiro para find do SEND OK
+unsigned long _tempoNuvemResposta;						// Temporiza resposta da nuvem
+const unsigned long TIMEOUT_ENVIO_PACOTE = 5000L;		// 5 segundos
+unsigned long _tempoHeartbeat;							// Temporiza o heartbeat
+const unsigned long HEARTBEAT_INTERVALO = 20000L;		// Temporizar 20 segundos
+String _nuvemPacoteEnviarHTTP;
+
+
+/**
+ *     SSSSSS   EEEEEEEE  TTTTTTTT UU    UU  PPPPPPP
+ *    SS     S  EE           TT    UU    UU  PP    PP
+ *    SS        EE           TT    UU    UU  PP    PP
+ *     SSSSSS   EEEEEE       TT    UU    UU  PPPPPPP
+ *          SS  EE           TT    UU    UU  PP
+ *    S     SS  EE           TT    UU    UU  PP
+ *     SSSSSS   EEEEEEEE     TT     UUUUUU   PP
+ *
+ * @brief	Inicializa a lógica do respirador, impondo as condições default.
+ */
+void setup() {
+  // Inicializa a lógica de alarme
+  pinMode(PINO_ALARME, INPUT);
+  _condicaoAlarmeAtual = ALARME_SEM;
+  
+  //Inicializa a lógica do ESP8266
+  pinMode(PINO_LED_ERRO, OUTPUT);
+  digitalWrite(PINO_LED_ERRO, LOW);
+  Serial.begin(SERIAL_BAUDRATE);
+  Serial.setTimeout(SERIAL_TIMEOUT);
+  
+  // Inicializa a lógica de controle da válvula do respirador
+  _servoMotor.attach(PINO_SERVO_MOTOR);
+  // Inicializa o display LCD 2x16
+  _lcd2x16.begin(TECLADO_NUMERO_COLUNAS, LCD_NUMERO_LINHAS);
+  _lcd2x16.clear();
+  _lcd2x16.print("  Inicializando ");
+  _lcd2x16.setCursor(0,1);
+  _lcd2x16.print("  Respirador");
+  
+  // Inicializando a lógica de controle do respirador
+  taxaDefault();
+  _tempoCompletarCiclo = 0;
+  _anguloAtualValvula = 0;
+  _estadoRespirador = RESPIRADOR_DESLIGADO;
+  _tempoAnterior = millis();
+  
+  // Confirma que o ESP8266 está operacional, inicializando o módulo
+  char sucesso = sendCommandTo8266("AT+RST", "ready") ? '+' : '-';
+  _lcd2x16.print(sucesso);
+  delay(500);
+  
+  // Conecta ao Simulator de WiFi usando o comando AT+CWJAP
+  String loginWiFi = "AT+CWJAP=\"" + _ssidName + "\",\"" + _ssidPassword + "\"";
+  sucesso = sendCommandTo8266(loginWiFi, "OK") ? '+' : '-';
+  _lcd2x16.print(sucesso);
+  delay(500);
+  
+  // Abre o canal de comunicação TCP com o site usando o comando AT+CIPSTART
+  String acessoTCP = "AT+CIPSTART=\"TCP\",\"" + _siteHost + "\"," + String(_tcpHttpPort);
+  sucesso = sendCommandTo8266(acessoTCP, "OK") ? '+' : '-';
+  _lcd2x16.print(sucesso);
+  delay(500);
+  
+  // Simula do processo de inicialização do hardware
+  _lcd2x16.print('!');
+  delay(2000);
+  
+  // Informa que o respirador foi energizado
+  _nuvemEstadoEnvio = NUVEM_LIVRE;
+  _nuvemEnviarEstadoFlag = true;
+  _tempoNuvemResposta = 0;
+  _tempoHeartbeat = 0;
+  verificaEstadoAlarme();
+  
+  // Pronto para operar  
+  mostraConfiguracaoRespirador();
+  mostraCondicaoOperacao('*');
+}
+
+
+/**
+ *    LL         OOOOOO    OOOOOO   PPPPPPP
+ *    LL        OO    OO  OO    OO  PP    PP
+ *    LL        OO    OO  OO    OO  PP    PP
+ *    LL        OO    OO  OO    OO  PPPPPPP
+ *    LL        OO    OO  OO    OO  PP
+ *    LL        OO    OO  OO    OO  PP
+ *    LLLLLLLL   OOOOOO    OOOOOO   PP
+ *
+ * @brief	Processa as teclas e ajusta a condinção da válvula.
+ */ 
+void loop() {
+  atualizaTemporizacoes();
+  // Controla o envio do estado síncrono (heartbeat)
+  if (0 == _tempoHeartbeat) {			// Temporizou o heartbeat?
+    _nuvemEnviarEstadoFlag = true;		// SIM, força o envio do estado
+    _tempoHeartbeat = HEARTBEAT_INTERVALO;		
+  }
+  // Verifica a condição de alarme periodicamente
+  verificaEstadoAlarme();
+  // Processa as teclas de comando
+  processaTeclado();
+  // Controla o envio do estado para a nuvem
+  processaNuvem();
+  // Atualiza a posição da válvula
+  atualizaValvula();
+  _servoMotor.write(_anguloAtualValvula);
+  delay(15); 	// Aguarda que o servo estabilize
+}
+
+
+/**
+ * @brief	Atualiza a condição atual de alarme.
+ *          Indica a condição de alarme no display LCD.
+ */
+void verificaEstadoAlarme() {
+  int alarmeAnalogico = analogRead(PINO_ALARME);
+  
+  // Normaliza a condição de alarme considerando as marcações do potenciômetro
+  int alarmeNormalizado = ALARME_SEM;
+  if (alarmeAnalogico >= ((11 * 1023) / 12))			alarmeNormalizado = ALARME_CRITICO6;
+  else if (alarmeAnalogico >= ((9 * 1023) / 12))		alarmeNormalizado = ALARME_CRITICO5;
+  else if (alarmeAnalogico >= ((7 * 1023) / 12))		alarmeNormalizado = ALARME_CRITICO4;
+  else if (alarmeAnalogico >= ((5 * 1023) / 12))		alarmeNormalizado = ALARME_AVISO3;
+  else if (alarmeAnalogico >= ((3 * 1023) / 12))		alarmeNormalizado = ALARME_AVISO2;
+  else if (alarmeAnalogico >= ((1 * 1023) / 12))		alarmeNormalizado = ALARME_AVISO1;
+
+  if (alarmeNormalizado != _condicaoAlarmeAtual) {	// Mudou a condição de alarme
+  	_condicaoAlarmeAtual = alarmeNormalizado;		// SIM, enviar para nuvem e alterar o LCD
+    mostraConfiguracaoRespirador();
+  }
+}
+
+
+/**
+ * @brief:	Quebra o envio do estado para a nuvem em pedaços, para que
+ *			não comprometa no funcionamento do respiradouro.
+ */
+void processaNuvem() {
+  
+  switch (_nuvemEstadoEnvio) {
+    case NUVEM_LIVRE: {					// Enviar estado para a nuvem, se solicitado
+      if (_nuvemEnviarEstadoFlag) {			// Tem estado se pendente?
+        _nuvemEnviarEstadoFlag = false;		// SIM, inicia o processo de envio
+        int tamanho = montaPacoteEstado();
+        String tamanhoPacote = "AT+CIPSEND=" + numberToString(tamanho);
+        purgeSerial();
+        sendCommandTo8266(tamanhoPacote, "");
+        _nuvemEstadoEnvio = NUVEM_AGUARDANDO_PROMPT;
+        _tempoNuvemResposta = TIMEOUT_ENVIO_PACOTE;
+        digitalWrite(PINO_LED_ERRO, LOW);
+      }
+      break;
+    } 
+    
+    case NUVEM_AGUARDANDO_PROMPT: {		// Aguarda prompt para enviar o GET
+      if (0 == _tempoNuvemResposta) {		// Timeout?
+        _nuvemEstadoEnvio = NUVEM_PURGANDO;	// SIM, sinaliza o problema 
+        digitalWrite(PINO_LED_ERRO, HIGH);
+        Serial.println("timeout PROMPT");
+      } else {								// NÃO, verifica se o prompt chegou
+        while (Serial.available()) {
+          char recebido = Serial.read();
+          if ('>' == recebido) {			// Recebeu o prompt?
+            purgeSerial();					// SIM, envia o pacote GET
+            sendCommandTo8266(_nuvemPacoteEnviarHTTP, "");
+            _nuvemIndice = 0;
+            _nuvemEstadoEnvio = NUVEM_AGUARDANDO_SEND_OK;
+            _tempoNuvemResposta = TIMEOUT_ENVIO_PACOTE;
+            break;
+          }
+        }
+      }
+      break;
+    } 
+      
+    case NUVEM_AGUARDANDO_SEND_OK: {	// Aguardando "SEND OK"?
+      if (0 == _tempoNuvemResposta) {		// Timeout?
+        _nuvemEstadoEnvio = NUVEM_PURGANDO;	// SIM, sinaliza o problema
+        digitalWrite(PINO_LED_ERRO, HIGH);
+        Serial.println("timeout SEND OK");
+      } else {								// NÃO, verifica se recebeu a confirmação
+        while (Serial.available()) {
+          char recebido = Serial.read();
+          if (RESPONSE_SEND_OK[_nuvemIndice] != recebido) {		// Caractere esperado?
+            _nuvemIndice = 0;									// NÃO, reinicia a busca
+          } else {												// SIM, verifica se encontrou tudo
+            _nuvemIndice++;
+            if (_nuvemIndice >= (sizeof(RESPONSE_SEND_OK)-1)) {	// Envio do estado completado?
+              _nuvemEstadoEnvio = NUVEM_PURGANDO;				// SIM, despreza os dados extras recebidos
+              Serial.println("SEND OK");							// Caracteriza o fim da transmissão
+              break;
+            }
+          }
+        }
+      }
+      break;
+    } 
+    
+  	default: {							// Purga dados extras
+      purgeSerial();
+      _nuvemEstadoEnvio = NUVEM_LIVRE;
+	  break;
+	}
+  }
+}
+
+
+/**
+ * @brief	Limpa o buffer de dados de recepção serial de dados antigos.
+ */
+void purgeSerial() {
+  while (Serial.available()) {
+    char recebido = Serial.read();
+  }
+}
+
+
+/**
+ * @brief	Monta o pacote GET para o envio do estado do respirador 
+ * 			para a nuvem e salva em _nuvemPacoteEnviarHTTP.
+ * @return	Numero de bytes do pacote GET.
+ */
+int montaPacoteEstado() {
+  String respiracao;
+  String taxaValvula;
+  String ligado;
+  String alarme = numberToString(_condicaoAlarmeAtual);
+  
+  // Extrai as informações a serem enviadas para a nuvem
+  if (RESPIRADOR_DESLIGADO == _estadoRespirador) {		// Respirador ligado?
+    ligado = "0";										// NÃO, desconsidera programação
+    respiracao = "0";
+    taxaValvula = "0";
+  } else if (_condicaoAlarmeAtual >= ALARME_CRITICO4) {	// Alarme crítico?
+    ligado = "-1";										// SIM, informa respirador alarmado
+    respiracao = "-1";
+    taxaValvula = "-1";
+  } else {												// NÃO, reporta estado de operação
+    ligado = "1";
+    respiracao  = numberToString(_respirarPorMinuto);
+    taxaValvula = numberToString(_taxaMovimentoValvula);
+  }
+  
+  // Constrói a requisição HTTP
+  _nuvemPacoteEnviarHTTP = "GET " + 
+    				  	   _siteURIbase + 
+    				   	   _siteField1 + ligado +
+                       	   _siteField2 + respiracao +
+                       	   _siteField3 + taxaValvula +
+                       	   _siteField4 + alarme +
+    				   	   " HTTP/1.1\r\nHost: " + 
+                       	   _siteHost + "\r\n\r\n";
+  
+  return _nuvemPacoteEnviarHTTP.length();
+}
+
+
+/**
+ * @brief	Envia o comando AT para o ESP8266 e aguarda uma string de resposta.
+ *			Se ocorrer algum erro, acende o LED de erro.
+ * @param	comando		Comando AT a ser enviado para o ESP8266.
+ * @param	aguardar	Resposta a ser aguardada do ESP8266.
+ *						Se vazia, não aguarda por uma resposta.
+ * @return	TRUE, se recebeu a resposta esperada.
+ *			FALSE, o comando falhou e o LED de erro foi aceso.
+ */
+bool sendCommandTo8266(String comando, char * aguardar) {
+  bool sucesso = false;
+  
+  // Envia o comando para o ESP8266 e aguarda que seja processado
+  Serial.println(comando);
+  Serial.flush();
+  delay(50);
+  
+  // Verifica se há uma resposta a ser aguardada
+  if (0 == aguardar[0])					// Aguardando alguma resposta?
+    sucesso = true;						// NÃO, considera que foi um sucesso
+  else
+    sucesso = Serial.find(aguardar);	// SIM, aguarda a resposta
+    
+  digitalWrite(PINO_LED_ERRO, !sucesso);
+  return sucesso;
+}
+
+
+/**
+ * @brief	Altera a taxa de respiração.
+ * @param	Acréscimo ou decréscimo da taxa de respiração.
+ *			Garante os valores limites.
+ */
+void taxaRespiracao(int delta) {
+  _respirarPorMinuto = constrain(_respirarPorMinuto + delta,
+                                 TAXA_REPIRACAO_MINIMA, 
+                                 TAXA_REPIRACAO_MAXIMA);
+  _unidadeTempoRespiracao = 60000L / 6 / _respirarPorMinuto;
+}
+
+
+/**
+ * @brief	Altera a taxa de movimentação da válvula.
+ * @param	Acréscimo ou decréscimo da taxa de movimentação.
+ *			Garante os valores limites.
+ */
+void taxaMovimentoValvula(int delta) {
+  _taxaMovimentoValvula = constrain(_taxaMovimentoValvula + delta,
+                                    VELOCIDADE_VALVULA_MINIMA, 
+                                    VELOCIDADE_VALVULA_MAXIMA);
+}
+
+
+// Impõem os parâmetros default de respiração
+void taxaDefault() {
+  _respirarPorMinuto = TAXA_REPIRACAO_DEFAULT;
+  taxaRespiracao(0);
+  _taxaMovimentoValvula = VELOCIDADE_VALVULA_DEFAULT;
+}
+
+
+/**
+ * @brief	Atualiza os valores de todos os temporizadores.
+ *			Decrementa o tempo (ms) entre as execuções do loop.
+ *			Quando os temporizadores chegam a zero, significa que
+ *          a temporização acabou.
+ *			Considera a possibilidade de millis() estourar a cada 50 dias.
+ */
+void atualizaTemporizacoes() {
+  // Determina o intervalo de tempo entre as chamadas
+  unsigned long tempoAtual = millis();
+  unsigned long delta_t = (tempoAtual >= _tempoAnterior) ?
+    					   tempoAtual - _tempoAnterior : tempoAtual;
+  _tempoAnterior = tempoAtual; 
+  
+  // Atualiza os temporizadores
+  _tempoCompletarCiclo = (delta_t < _tempoCompletarCiclo) ? (_tempoCompletarCiclo - delta_t) : 0;
+  _tempoNuvemResposta  = (delta_t < _tempoNuvemResposta)  ? (_tempoNuvemResposta - delta_t)  : 0;
+  _tempoHeartbeat      = (delta_t < _tempoHeartbeat)      ? (_tempoHeartbeat - delta_t)      : 0;
+}
+
+
+/**
+ * @brief	Mostra a configuração atual do respirador.
+ */
+void mostraConfiguracaoRespirador() {
+  _lcd2x16.setCursor(0, 0);
+  _lcd2x16.print(_respirarPorMinuto);
+  _lcd2x16.print("ar/min @");
+  _lcd2x16.print(_taxaMovimentoValvula);
+  _lcd2x16.print('\xB2');
+  // Acrescenta a sinalização de alarme
+  if (ALARME_AVISO1 == _condicaoAlarmeAtual)			_lcd2x16.print("!");
+  else if (ALARME_AVISO2 == _condicaoAlarmeAtual)		_lcd2x16.print("!!");
+  else if (ALARME_AVISO3 == _condicaoAlarmeAtual)		_lcd2x16.print("!!!");
+  else if (ALARME_CRITICO4 == _condicaoAlarmeAtual)		_lcd2x16.print("\xD7");
+  else if (ALARME_CRITICO5 == _condicaoAlarmeAtual)		_lcd2x16.print("\xD7\xD7");
+  else if (ALARME_CRITICO6 == _condicaoAlarmeAtual)		_lcd2x16.print("\xD7\xD7\xD7");
+  _lcd2x16.print("     "); 	// Garante limpar fim da linha 
+}
+
+
+/**
+ * @brief	Processa a tecla pressionada:
+ *			tecla 'A' : aumenta a frequência respiratória.
+ *			tecla 'B' : diminui a frequência respiratória.
+ *			tecla 'C' : aumenta a taxa de movimentação da válvula.
+ *			tecla 'D' : diminui a taxa de movimentação da válvula.
+ *			tecla '*' : liga/desliga o respirador.
+ *			tecla '#' : impõem as temporizações default.
+ */
+void processaTeclado() {
+  char tecla = _teclado4x4.getKey();
+  
+  if (NO_KEY != tecla) {
+    if ('A' == tecla) 				taxaRespiracao(TAXA_REPIRACAO_DELTA);
+    else if ('B' == tecla)  		taxaRespiracao(-TAXA_REPIRACAO_DELTA);
+    else if ('C' == tecla)			taxaMovimentoValvula(VELOCIDADE_VALVULA_DELTA);
+    else if ('D' == tecla) 			taxaMovimentoValvula(-VELOCIDADE_VALVULA_DELTA);
+    else if ('#' == tecla) 			taxaDefault();
+    else if ('*' == tecla) {	// Inverte a condição de operação do respirador
+      if (RESPIRADOR_DESLIGADO == _estadoRespirador) {
+        // Ligando o respirador
+        _estadoRespirador = PAUSA_POS_EXPIRAR;
+        mostraCondicaoOperacao(' ');
+        _tempoCompletarCiclo = _unidadeTempoRespiracao;
+      } else {
+        // Desligando o respirador
+        _estadoRespirador = RESPIRADOR_DESLIGADO;
+        mostraCondicaoOperacao('*');
+      }
+    }
+    mostraConfiguracaoRespirador();
+  }
+}
+
+
+/**
+ * @brief	Atualiza a lógica de estado da válvula, segundo a base de
+ *			tempo do ciclo: PAUSA -INSPIRA(2) - PAUSA - EXPIRA(2).
+ */
+void atualizaValvula() {
+  bool mudarEstado = false;
+  if (0 == _tempoCompletarCiclo) {			// Esgotou o tempo do ciclo?
+    mudarEstado = true;						// SIM, muda de estado
+    _tempoCompletarCiclo = _unidadeTempoRespiracao;
+  }
+  // Atualiza o ângulo da válvula
+  switch (_estadoRespirador) {    
+    case RESPIRADOR_DESLIGADO: {
+      anguloValvula(VALVULA_PAUSA);
+      mostraCondicaoOperacao('*');
+      break;
+    }
+    case PAUSA_POS_EXPIRAR: {
+      anguloValvula(VALVULA_PAUSA);
+      if (mudarEstado) {
+        _estadoRespirador = INSPIRANDO_1;
+        mostraCondicaoOperacao('\xBF');
+      }
+      break;
+    }
+    case INSPIRANDO_1: {
+      anguloValvula(VALVULA_INSPIRANDO);
+      if (mudarEstado) {
+        _estadoRespirador = INSPIRANDO_2;
+        mostraCondicaoOperacao('\xBF');
+      }
+      break;
+    }
+    case INSPIRANDO_2: {
+      anguloValvula(VALVULA_INSPIRANDO);
+      if (mudarEstado) {
+        _estadoRespirador = PAUSA_POS_INSPIRAR;
+        mostraCondicaoOperacao('-');
+      }
+      break;
+    }
+    case PAUSA_POS_INSPIRAR: {
+      anguloValvula(VALVULA_PAUSA);
+      if (mudarEstado) {
+        _estadoRespirador = EXPIRANDO_1;
+        mostraCondicaoOperacao('_');
+      }
+      break;
+    }
+    case EXPIRANDO_1: {
+      anguloValvula(VALVULA_EXPIRANDO);
+      if (mudarEstado) {
+        _estadoRespirador = EXPIRANDO_2;
+        mostraCondicaoOperacao('_');
+      }
+      break;
+    }
+    case EXPIRANDO_2: {
+      anguloValvula(VALVULA_EXPIRANDO);
+      if (mudarEstado) {
+        _estadoRespirador = PAUSA_POS_EXPIRAR;
+        mostraCondicaoOperacao('-');
+      }
+      break;
+    }
+    default: {								// Reinicializa a lógica
+      _estadoRespirador = RESPIRADOR_DESLIGADO;
+      taxaDefault();
+      break;
+    }
+  }
+}
+  
+  
+/**
+ * @brief	Atualiza o ângulo da válvula, considerando
+ *			- Ângulo atual.
+ *			- Taxa de velocidade de movimentação da válvula.
+ *			- Posição desejada para a válvula.
+ * @param	objetivo	ângulo desejado para a válvula.
+ * @return	Nova posição da válvula.
+ */
+int anguloValvula(int objetivo) {
+  
+  if(_condicaoAlarmeAtual <= ALARME_AVISO3) {
+    // Não move a válvula enquanto em alarme crítico
+    int anguloDesejado = constrain(objetivo, VALVULA_EXPIRANDO, VALVULA_INSPIRANDO);
+
+    if (_anguloAtualValvula > objetivo) {
+      // Deve diminuir o ângulo da válvula
+      int novoAngulo = _anguloAtualValvula - _taxaMovimentoValvula;
+      _anguloAtualValvula = (novoAngulo > objetivo) ? novoAngulo : objetivo;
+    } else {
+      // Deve aumentar o ângulo da válvula
+      int novoAngulo = _anguloAtualValvula + _taxaMovimentoValvula;
+      _anguloAtualValvula = (novoAngulo < objetivo) ? novoAngulo : objetivo;
+    }
+  }
+}
+
+
+/**
+ * @brief	Mostra na segunda linha do display LCD a condição da válvula.
+ * @param	Identifica a condição a ser apresentado no display LCD.
+ *          '_', se expirando.
+ *          '-', se pausado.
+ *          '^', se inspirando.
+ *          '*', se DESLIGADO.
+ *          ' ', se LIGANDO.
+ */
+void mostraCondicaoOperacao(char simbolo) {
+  if ('*' == simbolo) {					// Respirador desligado?
+    _lcd2x16.setCursor(0, 1);			// SIM, informa
+    _lcd2x16.print("===DESLIGADO=== ");
+    _cursorColunaLinha1 = 0;
+  } else if(_condicaoAlarmeAtual >= ALARME_CRITICO4) {	// Respirador alarmado?
+    _lcd2x16.setCursor(0, 1);							// SIM, sinaliza o alarme
+    _lcd2x16.print("ALARME FATAL ");
+    _lcd2x16.print(_condicaoAlarmeAtual);
+    _lcd2x16.print("   ");
+    _cursorColunaLinha1 = 0;
+  } else if (' ' == simbolo) {			// Ligando respirador?
+    _lcd2x16.setCursor(0, 1);			// SIM, informa
+    _lcd2x16.print("- ===LIGANDO=== ");
+    _cursorColunaLinha1 = 1;
+  } else {								// NÃO, atualiza o status da respiração
+    byte inicio = (_cursorColunaLinha1 >= LCD_NUMERO_COLUNAS) ? 0 : _cursorColunaLinha1;
+    _lcd2x16.setCursor(inicio, 1);
+    _lcd2x16.print(simbolo);
+    _lcd2x16.print(' ');
+    _cursorColunaLinha1 = inicio + 1;
+  }
+}
+
+
+// Função necessária para corrigir bug em String(int)
+String numberToString(int valor) {
+  char numero[6];
+  sprintf(numero, "%i", valor);
+  return String(numero);
+}
